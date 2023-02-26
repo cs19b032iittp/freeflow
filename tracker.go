@@ -11,19 +11,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
-// type Peer struct {
-// 	ID peer.ID
-// }
-
-type MetaPeer struct {
-	ID     peer.ID
-	Chunks []int64
-}
-
 type MetaTracker struct {
 	FileHash string
 	FileName string
-	Peers    []MetaPeer
+	Peers    map[peer.ID][]int64
 }
 
 var Trackers map[string]MetaTracker
@@ -31,13 +22,13 @@ var Trackers map[string]MetaTracker
 type TrackerService struct {
 }
 
-type AnnounceChunksArgs struct {
+type AnnounceChunksParams struct {
 	FileHash string
-	Indexes  int64
-	PeerAddr string
+	Chunks   []int64
+	ID       peer.ID
 }
 
-type AnnounceChunksReply struct{}
+type AnnounceChunksResponse struct{}
 
 type AnnounceFileParams struct {
 	FileHash    string
@@ -56,22 +47,29 @@ type GetPeersParams struct {
 }
 
 type GetPeersResponse struct {
-	Peers []MetaPeer
+	Peers map[peer.ID][]int64
 }
 
 func (ts *TrackerService) GetPeers(ctx context.Context, params GetPeersParams, resp *GetPeersResponse) error {
 	fmt.Println("Got a GetPeers RPC")
-	fmt.Println("lenth of trackers: ", len(Trackers))
-
 	fmt.Println(Trackers[params.FileHash].Peers)
-
 	resp.Peers = Trackers[params.FileHash].Peers
 
 	return nil
 }
 
-func (ts *TrackerService) AnnounceChunks(ctx context.Context, args AnnounceChunksArgs, reply *AnnounceChunksReply) error {
-	fmt.Println("Got a AnnounceChunks RPC from peer: ", args.PeerAddr)
+func (ts *TrackerService) AnnounceChunks(ctx context.Context, params AnnounceChunksParams, resp *AnnounceChunksResponse) error {
+	fmt.Println("Got a AnnounceChunks RPC from peer: ", params.ID.Pretty())
+
+	m, ok := Trackers[params.FileHash]
+
+	var mutex sync.Mutex
+	if ok {
+		mutex.Lock()
+		m.Peers[params.ID] = params.Chunks
+		mutex.Unlock()
+	}
+
 	return nil
 }
 
@@ -81,7 +79,6 @@ func (ts *TrackerService) AnnounceFile(ctx context.Context, params AnnounceFileP
 	_, ok := Trackers[params.FileHash]
 	if !ok {
 
-		metaPeers := make([]MetaPeer, 0)
 		metaChunks := make([]int64, params.NumOfChunks)
 
 		var wg sync.WaitGroup
@@ -94,16 +91,16 @@ func (ts *TrackerService) AnnounceFile(ctx context.Context, params AnnounceFileP
 		}
 		wg.Wait()
 
-		metaPeers = append(metaPeers, MetaPeer{ID: params.ID, Chunks: metaChunks})
-		Trackers[params.FileHash] = MetaTracker{FileHash: params.FileHash, FileName: params.FileName, Peers: metaPeers}
+		// metaPeers = append(metaPeers, MetaPeer{ID: params.ID, Chunks: metaChunks})
+		Peers := make(map[peer.ID][]int64)
+		Peers[params.ID] = metaChunks
+		Trackers[params.FileHash] = MetaTracker{FileHash: params.FileHash, FileName: params.FileName, Peers: Peers}
 
 		resp.Success = true
 		resp.Message = "File was open to share"
 	} else {
 		resp.Message = "File already exists"
 	}
-
-	fmt.Println(Trackers, len(Trackers))
 
 	return nil
 }

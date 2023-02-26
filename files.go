@@ -53,7 +53,7 @@ var fileProtocol = protocol.ID("/p2p/rpc/file")
 func (fs *FileService) GetChunk(ctx context.Context, params GetChunkParams, resp *GetChunkResponse) error {
 	fmt.Println("Got a GetChunk RPC")
 	meta := Files[params.FileHash]
-	inputFile, err := os.Open(meta.Name)
+	inputFile, err := os.Open("4000/" + meta.Name)
 	if err != nil {
 		panic(err)
 	}
@@ -90,6 +90,7 @@ func GenerateMeta(filepath string, m *Meta) string {
 	}
 
 	m.FileSize = fileInfo.Size()
+	m.ChunkSize = chunkSize
 
 	m.NumOfChunks = m.FileSize / chunkSize
 	if m.FileSize%chunkSize != 0 {
