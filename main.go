@@ -16,8 +16,6 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-var trackers = make(map[string]Meta)
-
 func makeHost(host string, port int) (host.Host, error) {
 	// Creates a new RSA key pair for this host.
 	prvKey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)

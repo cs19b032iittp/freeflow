@@ -3,63 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	gorpc "github.com/libp2p/go-libp2p-gorpc"
-
 	"github.com/libp2p/go-libp2p/core/peer"
-	multiaddr "github.com/multiformats/go-multiaddr"
 )
 
-func CreateUser(cfg *config) {
-	h, err := makeHost(cfg.listenHost, cfg.listenPort)
-	if err != nil {
-		panic(err)
-	}
-
-	ctx := context.Background()
-
-	// setup local mDNS discovery
-	if err := setupDiscovery(h, "user"); err != nil {
-		panic(err)
-	}
-
-	var server string
-	fmt.Print("> ")
-	fmt.Scanln(&server)
-
-	ma, err := multiaddr.NewMultiaddr(server)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("addrs: ", ma)
-	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("peerInfo: ", peerInfo)
-
-	err = h.Connect(ctx, *peerInfo)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("Connected")
-
-	fmt.Println("PeerStore: ", h.Peerstore().PeerInfo(h.ID()))
-	var args = AnnounceChunksArgs{PeerAddr: server}
-	rpcClient := gorpc.NewClient(h, trackerProtocol)
-
-	var reply AnnounceChunksReply
-	err = rpcClient.Call(peerInfo.ID, "TrackerService", "AnnounceChunks", args, &reply)
-	if err != nil {
-		panic(err)
-	}
-
-}
-
-/*
 func CreateUser(cfg *config) {
 	h, err := makeHost(cfg.listenHost, cfg.listenPort)
 	if err != nil {
@@ -75,9 +26,11 @@ func CreateUser(cfg *config) {
 	}
 
 	// setup local mDNS discovery
-	if err := setupDiscovery(h, "user"); err != nil {
+	if err := setupDiscovery(h, "tracker"); err != nil {
 		panic(err)
 	}
+
+	rpcClient := gorpc.NewClient(h, trackerProtocol)
 
 	for {
 
@@ -96,17 +49,27 @@ func CreateUser(cfg *config) {
 			fmt.Print("> ")
 			fmt.Scanln(&filePath)
 
-			fileHash := GenerateMeta(filePath)
-			fmt.Println(hex.EncodeToString(fileHash[:]))
+			m := MetaTracker{}
+			fileHash := GenerateMeta(filePath, &m)
+			fmt.Println(fileHash)
 
-			topicName := hex.EncodeToString(fileHash[:])
-			topic, err := ps.Join(topicName)
+			trackers := ps.ListPeers("tracker")
+
+			if len(trackers) == 0 {
+				fmt.Println("Unable to connect to a tracker, Please try Again!")
+				return
+			}
+
+			tracker := trackers[0]
+
+			params := AnnounceFileParams{M: m, ID: h.ID()}
+			resp := AnnounceFileResponse{}
+			err = rpcClient.Call(tracker, "TrackerService", "AnnounceFile", params, &resp)
 			if err != nil {
 				panic(err)
 			}
 
-			// and subscribe to it
-			topic.Subscribe()
+			fmt.Println(resp)
 
 		case "2":
 			var filePath string
@@ -114,9 +77,28 @@ func CreateUser(cfg *config) {
 			fmt.Print("> ")
 			fmt.Scanln(&filePath)
 
-			m := &Meta{}
+			m := &MetaTracker{}
 			DecodeMeta(filePath, m)
-			fmt.Println(ps.ListPeers(hex.EncodeToString(m.Hash)))
+
+			trackers := ps.ListPeers("tracker")
+
+			if len(trackers) == 0 {
+				fmt.Println("Unable to connect to a tracker, Please try Again!")
+				return
+			}
+
+			tracker := trackers[0]
+
+			chunks := make([]MetaChunk, 0)
+			var resp = GetPeersResponse{Chunks: chunks}
+			var params = GetPeersParams{FileHash: m.FileHash}
+			fmt.Println(m.FileHash)
+			err = rpcClient.Call(tracker, "TrackerService", "GetPeers", params, &resp)
+			if err != nil {
+				panic(err)
+			}
+
+			fmt.Println(resp)
 
 		case "3":
 			os.Exit(0)
@@ -139,10 +121,69 @@ func CreateUser(cfg *config) {
 			for _, addr := range addrs {
 				fmt.Printf("Connected to peer at %s\n", addr)
 			}
-
 		}
-
 	}
+}
+
+/*
+func CreateUser(cfg *config) {
+	h, err := makeHost(cfg.listenHost, cfg.listenPort)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := context.Background()
+
+	// create a new PubSub service using the GossipSub router
+	ps, err := pubsub.NewGossipSub(ctx, h)
+	if err != nil {
+		panic(err)
+	}
+
+	// setup local mDNS discovery
+	if err := setupDiscovery(h, "user"); err != nil {
+		panic(err)
+	}
+
+
+	// for {
+	// 	var server string
+
+	// 	fmt.Print("> ")
+	// 	fmt.Scanln(&server)
+
+	// 	ma, err := multiaddr.NewMultiaddr(server)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	fmt.Println("addrs: ", ma)
+	// 	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	fmt.Println("peerInfo: ", peerInfo)
+
+	// 	err = h.Connect(ctx, *peerInfo)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	fmt.Println("Connected")
+
+	// 	fmt.Println("PeerStore: ", h.Peerstore().PeerInfo(h.ID()))
+	// 	var args = AnnounceChunksArgs{PeerAddr: server}
+	// 	rpcClient := gorpc.NewClient(h, trackerProtocol)
+
+	// 	var reply AnnounceChunksReply
+	// 	err = rpcClient.Call(peerInfo.ID, "TrackerService", "AnnounceChunks", args, &reply)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// }
+
+
 
 }
 

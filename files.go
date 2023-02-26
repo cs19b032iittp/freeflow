@@ -14,9 +14,8 @@ import (
 const chunkSize = 128
 
 type Chunk struct {
-	Index      int64
-	Hash       []byte
-	Downloaded bool
+	Index int64
+	Hash  string
 }
 
 type Meta struct {
@@ -24,18 +23,17 @@ type Meta struct {
 	FileSize    int64
 	ChunkSize   int64
 	NumOfChunks int64
-	Hash        []byte
+	Hash        string
 	Chunks      []Chunk
 }
 
 // Hashes the given data and returns its SHA256 hash.
-func hashContent(data []byte) []byte {
+func hashContent(data []byte) string {
 	hash := sha256.Sum256(data)
-	return hash[:]
+	return hex.EncodeToString(hash[:])
 }
 
-func GenerateMeta(filepath string) []byte {
-	m := &Meta{}
+func GenerateMeta(filepath string, m *MetaTracker) string {
 
 	inputFile, err := os.Open(filepath)
 	if err != nil {
@@ -58,16 +56,15 @@ func GenerateMeta(filepath string) []byte {
 	fileData := make([]byte, m.FileSize)
 	inputFile.Read(fileData)
 
-	m.Hash = hashContent(fileData)
-	m.Name = fileInfo.Name()
+	m.FileHash = hashContent(fileData)
+	m.FileInfo = fileInfo.Name()
 
 	var wg sync.WaitGroup
 	wg.Add(int(m.NumOfChunks))
 
-	m.Chunks = []Chunk{}
+	m.Chunks = make([]MetaChunk, m.NumOfChunks)
 
 	fmt.Println(m.NumOfChunks)
-	mu := sync.Mutex{}
 	for i := int64(0); i < m.NumOfChunks; i++ {
 		go func(chunkIndex int64) {
 			defer wg.Done()
@@ -83,23 +80,16 @@ func GenerateMeta(filepath string) []byte {
 				panic(err)
 			}
 
-			c := Chunk{}
+			c := MetaChunk{}
 			c.Index = chunkIndex
 			c.Hash = hashContent(chunk)
-			c.Downloaded = true
-
-			mu.Lock()
-			m.Chunks = append(m.Chunks, c)
-			mu.Unlock()
-
-			// Do something with the chunk
-			fmt.Printf("Chunk %d: %s\n", chunkIndex, string(chunk))
+			m.Chunks[chunkIndex] = c
 		}(i)
 	}
 
 	wg.Wait()
 
-	substrings := strings.Split(m.Name, ".")
+	substrings := strings.Split(m.FileInfo, ".")
 
 	metaFile, err := os.Create("./metas/" + substrings[len(substrings)-2] + ".meta")
 	if err != nil {
@@ -111,13 +101,10 @@ func GenerateMeta(filepath string) []byte {
 		log.Fatal(err)
 	}
 	metaFile.Close()
-
-	trackers[hex.EncodeToString(m.Hash)] = *m
-
-	return m.Hash
+	return m.FileHash
 }
 
-func DecodeMeta(filepath string, m *Meta) {
+func DecodeMeta(filepath string, m *MetaTracker) {
 
 	metaFile, err := os.Open(filepath)
 	if err != nil {
@@ -129,18 +116,6 @@ func DecodeMeta(filepath string, m *Meta) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	var wg sync.WaitGroup
-	wg.Add(int(m.NumOfChunks))
-
-	for i := int64(0); i < m.NumOfChunks; i++ {
-		go func(chunkIndex int64) {
-			defer wg.Done()
-			m.Chunks[chunkIndex].Downloaded = false
-		}(i)
-	}
-
-	wg.Wait()
 
 	metaFile.Close()
 
