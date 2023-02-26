@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
@@ -9,13 +10,16 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
 const chunkSize = 128
 
 type Chunk struct {
-	Index int64
-	Hash  string
+	Index      int64
+	Hash       string
+	Downloaded bool
 }
 
 type Meta struct {
@@ -27,13 +31,52 @@ type Meta struct {
 	Chunks      []Chunk
 }
 
+var Files map[string]Meta
+
+type FileService struct {
+}
+
+type GetChunkParams struct {
+	FileHash   string
+	ChunkIndex int64
+	Size       int64
+	Offset     int64
+}
+
+type GetChunkResponse struct {
+	Data []byte
+	Size int64
+}
+
+var fileProtocol = protocol.ID("/p2p/rpc/file")
+
+func (fs *FileService) GetChunk(ctx context.Context, params GetChunkParams, resp *GetChunkResponse) error {
+	fmt.Println("Got a GetChunk RPC")
+	meta := Files[params.FileHash]
+	inputFile, err := os.Open(meta.Name)
+	if err != nil {
+		panic(err)
+	}
+	defer inputFile.Close()
+
+	buffer := make([]byte, params.Size)
+	_, err = inputFile.ReadAt(buffer, params.Offset)
+	if err != nil {
+		panic(err)
+	}
+
+	resp.Data = buffer
+
+	return nil
+}
+
 // Hashes the given data and returns its SHA256 hash.
 func hashContent(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }
 
-func GenerateMeta(filepath string, m *MetaTracker) string {
+func GenerateMeta(filepath string, m *Meta) string {
 
 	inputFile, err := os.Open(filepath)
 	if err != nil {
@@ -56,13 +99,13 @@ func GenerateMeta(filepath string, m *MetaTracker) string {
 	fileData := make([]byte, m.FileSize)
 	inputFile.Read(fileData)
 
-	m.FileHash = hashContent(fileData)
-	m.FileInfo = fileInfo.Name()
+	m.Hash = hashContent(fileData)
+	m.Name = fileInfo.Name()
 
 	var wg sync.WaitGroup
 	wg.Add(int(m.NumOfChunks))
 
-	m.Chunks = make([]MetaChunk, m.NumOfChunks)
+	m.Chunks = make([]Chunk, m.NumOfChunks)
 
 	fmt.Println(m.NumOfChunks)
 	for i := int64(0); i < m.NumOfChunks; i++ {
@@ -80,7 +123,7 @@ func GenerateMeta(filepath string, m *MetaTracker) string {
 				panic(err)
 			}
 
-			c := MetaChunk{}
+			c := Chunk{}
 			c.Index = chunkIndex
 			c.Hash = hashContent(chunk)
 			m.Chunks[chunkIndex] = c
@@ -89,7 +132,7 @@ func GenerateMeta(filepath string, m *MetaTracker) string {
 
 	wg.Wait()
 
-	substrings := strings.Split(m.FileInfo, ".")
+	substrings := strings.Split(m.Name, ".")
 
 	metaFile, err := os.Create("./metas/" + substrings[len(substrings)-2] + ".meta")
 	if err != nil {
@@ -101,10 +144,10 @@ func GenerateMeta(filepath string, m *MetaTracker) string {
 		log.Fatal(err)
 	}
 	metaFile.Close()
-	return m.FileHash
+	return m.Hash
 }
 
-func DecodeMeta(filepath string, m *MetaTracker) {
+func DecodeMeta(filepath string, m *Meta) {
 
 	metaFile, err := os.Open(filepath)
 	if err != nil {

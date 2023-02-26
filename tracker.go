@@ -3,34 +3,27 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 
 	gorpc "github.com/libp2p/go-libp2p-gorpc"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/multiformats/go-multiaddr"
 )
 
 // type Peer struct {
 // 	ID peer.ID
 // }
 
-type MetaChunk struct {
-	Index      int64
-	Hash       string
-	Peers      []peer.ID
-	NumOfPeers int64
+type MetaPeer struct {
+	ID     peer.ID
+	Chunks []int64
 }
 
 type MetaTracker struct {
-	FileHash    string
-	FileInfo    string
-	FileSize    int64
-	ChunkSize   int64
-	NumOfChunks int64
-	Chunks      []MetaChunk
+	FileHash string
+	FileName string
+	Peers    []MetaPeer
 }
 
 var Trackers map[string]MetaTracker
@@ -47,8 +40,10 @@ type AnnounceChunksArgs struct {
 type AnnounceChunksReply struct{}
 
 type AnnounceFileParams struct {
-	M  MetaTracker
-	ID peer.ID
+	FileHash    string
+	FileName    string
+	NumOfChunks int64
+	ID          peer.ID
 }
 
 type AnnounceFileResponse struct {
@@ -61,35 +56,16 @@ type GetPeersParams struct {
 }
 
 type GetPeersResponse struct {
-	Chunks []MetaChunk
+	Peers []MetaPeer
 }
 
-type GetChunkParams struct {
-	FileHash string
-}
-
-type GetChunkResponse struct {
-	Chunks []MetaChunk
-}
-
-func (ts *TrackerService) GetChunk(ctx context.Context, params GetPeersParams, reply *GetPeersResponse) error {
+func (ts *TrackerService) GetPeers(ctx context.Context, params GetPeersParams, resp *GetPeersResponse) error {
 	fmt.Println("Got a GetPeers RPC")
 	fmt.Println("lenth of trackers: ", len(Trackers))
 
-	fmt.Println(Trackers[params.FileHash].Chunks)
+	fmt.Println(Trackers[params.FileHash].Peers)
 
-	reply.Chunks = Trackers[params.FileHash].Chunks
-
-	return nil
-}
-
-func (ts *TrackerService) GetPeers(ctx context.Context, params GetPeersParams, reply *GetPeersResponse) error {
-	fmt.Println("Got a GetPeers RPC")
-	fmt.Println("lenth of trackers: ", len(Trackers))
-
-	fmt.Println(Trackers[params.FileHash].Chunks)
-
-	reply.Chunks = Trackers[params.FileHash].Chunks
+	resp.Peers = Trackers[params.FileHash].Peers
 
 	return nil
 }
@@ -100,26 +76,26 @@ func (ts *TrackerService) AnnounceChunks(ctx context.Context, args AnnounceChunk
 }
 
 func (ts *TrackerService) AnnounceFile(ctx context.Context, params AnnounceFileParams, resp *AnnounceFileResponse) error {
+	fmt.Println("Got a AnnounceFile RPC from peer: ", params.ID)
 	resp.Success = false
-	m := params.M
-	_, ok := Trackers[params.M.FileHash]
+	_, ok := Trackers[params.FileHash]
 	if !ok {
+
+		metaPeers := make([]MetaPeer, 0)
+		metaChunks := make([]int64, params.NumOfChunks)
+
 		var wg sync.WaitGroup
-		wg.Add(int(m.NumOfChunks))
-		for i := int64(0); i < m.NumOfChunks; i++ {
+		wg.Add(int(params.NumOfChunks))
+		for i := int64(0); i < params.NumOfChunks; i++ {
 			go func(chunkIndex int64) {
 				defer wg.Done()
-
-				m.Chunks[chunkIndex].NumOfPeers = 1
-
-				peers := make([]peer.ID, 0)
-				peers = append(peers, params.ID)
-				m.Chunks[chunkIndex].Peers = peers
+				metaChunks[chunkIndex] = 1
 			}(i)
 		}
 		wg.Wait()
 
-		Trackers[m.FileHash] = m
+		metaPeers = append(metaPeers, MetaPeer{ID: params.ID, Chunks: metaChunks})
+		Trackers[params.FileHash] = MetaTracker{FileHash: params.FileHash, FileName: params.FileName, Peers: metaPeers}
 
 		resp.Success = true
 		resp.Message = "File was open to share"
@@ -167,14 +143,6 @@ func CreateTracker(cfg *config) {
 	err = rpcHost.Register(&svc)
 	if err != nil {
 		panic(err)
-	}
-	for _, addr := range h.Addrs() {
-		ipfsAddr, err := multiaddr.NewMultiaddr("/ipfs/" + h.ID().Pretty())
-		if err != nil {
-			panic(err)
-		}
-		peerAddr := addr.Encapsulate(ipfsAddr)
-		log.Printf("I'm listening on %s\n", peerAddr)
 	}
 	select {}
 }

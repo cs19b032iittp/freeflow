@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
@@ -30,7 +31,16 @@ func CreateUser(cfg *config) {
 		panic(err)
 	}
 
-	rpcClient := gorpc.NewClient(h, trackerProtocol)
+	Files = make(map[string]Meta)
+	svc := FileService{}
+	rpcHost := gorpc.NewServer(h, fileProtocol)
+	err = rpcHost.Register(&svc)
+	if err != nil {
+		panic(err)
+	}
+
+	rpcTracker := gorpc.NewClient(h, trackerProtocol)
+	// rpcFile := gorpc.NewClient(h, fileProtocol)
 
 	for {
 
@@ -49,7 +59,7 @@ func CreateUser(cfg *config) {
 			fmt.Print("> ")
 			fmt.Scanln(&filePath)
 
-			m := MetaTracker{}
+			m := Meta{}
 			fileHash := GenerateMeta(filePath, &m)
 			fmt.Println(fileHash)
 
@@ -62,13 +72,25 @@ func CreateUser(cfg *config) {
 
 			tracker := trackers[0]
 
-			params := AnnounceFileParams{M: m, ID: h.ID()}
+			params := AnnounceFileParams{FileHash: m.Hash, ID: h.ID(), FileName: m.Name, NumOfChunks: m.NumOfChunks}
 			resp := AnnounceFileResponse{}
-			err = rpcClient.Call(tracker, "TrackerService", "AnnounceFile", params, &resp)
+
+			err = rpcTracker.Call(tracker, "TrackerService", "AnnounceFile", params, &resp)
 			if err != nil {
 				panic(err)
 			}
 
+			var wg sync.WaitGroup
+			wg.Add(int(m.NumOfChunks))
+			for i := int64(0); i < m.NumOfChunks; i++ {
+				go func(chunkIndex int64) {
+					defer wg.Done()
+					m.Chunks[chunkIndex].Downloaded = true
+				}(i)
+			}
+			wg.Wait()
+
+			Files[m.Hash] = m
 			fmt.Println(resp)
 
 		case "2":
@@ -77,7 +99,7 @@ func CreateUser(cfg *config) {
 			fmt.Print("> ")
 			fmt.Scanln(&filePath)
 
-			m := &MetaTracker{}
+			m := &Meta{}
 			DecodeMeta(filePath, m)
 
 			trackers := ps.ListPeers("tracker")
@@ -89,16 +111,24 @@ func CreateUser(cfg *config) {
 
 			tracker := trackers[0]
 
-			chunks := make([]MetaChunk, 0)
-			var resp = GetPeersResponse{Chunks: chunks}
-			var params = GetPeersParams{FileHash: m.FileHash}
-			fmt.Println(m.FileHash)
-			err = rpcClient.Call(tracker, "TrackerService", "GetPeers", params, &resp)
+			peers := make([]MetaPeer, 0)
+			var resp = GetPeersResponse{Peers: peers}
+			var params = GetPeersParams{FileHash: m.Hash}
+			fmt.Println(m.Hash)
+			err = rpcTracker.Call(tracker, "TrackerService", "GetPeers", params, &resp)
 			if err != nil {
 				panic(err)
 			}
 
 			fmt.Println(resp)
+
+			// for {
+
+			// 	peers := resp.Peers
+			// 	peerList := []peer.ID
+			// 	tmp_map = make(map[int64])
+
+			// }
 
 		case "3":
 			os.Exit(0)
