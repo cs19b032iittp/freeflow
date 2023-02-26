@@ -93,6 +93,7 @@ func CreateUser(cfg *config) {
 			}
 			wg.Wait()
 
+			m.FilePath = cfg.listenPort + "/" + m.Name
 			Files[m.Hash] = m
 
 			if resp.Success {
@@ -110,6 +111,9 @@ func CreateUser(cfg *config) {
 
 			m := &Meta{}
 			DecodeMeta(filePath, m)
+			m.FilePath = cfg.listenPort + "/" + m.Name
+
+			Files[m.Hash] = *m
 
 			trackers := ps.ListPeers("tracker")
 
@@ -149,7 +153,7 @@ func CreateUser(cfg *config) {
 				}
 			}
 
-			outputFile, err := os.Create(m.Name)
+			outputFile, err := os.Create(m.FilePath)
 			if err != nil {
 				panic(err)
 			}
@@ -161,16 +165,16 @@ func CreateUser(cfg *config) {
 				panic(err)
 			}
 
-			var start = false
+			var start = 0
 
-			var acWg sync.WaitGroup // Announce Chunk Wait Group
-			acWg.Add(1)
 			go func() {
 
 				for {
 
-					if start {
-
+					switch start {
+					case 0:
+						continue
+					case 1:
 						Chunks := make([]int64, m.NumOfChunks)
 						for i := int64(0); i < m.NumOfChunks; i++ {
 							if m.Chunks[i].Downloaded {
@@ -185,6 +189,9 @@ func CreateUser(cfg *config) {
 						if err != nil {
 							panic(err)
 						}
+
+					case 2:
+						break
 					}
 
 					time.Sleep(time.Millisecond * 2000)
@@ -199,12 +206,14 @@ func CreateUser(cfg *config) {
 				go func(i int64) {
 					defer wg.Done()
 
-					t := time.Second * time.Duration(rand.Intn(int(m.NumOfChunks-2)+2))
+					t := time.Second * time.Duration(rand.Intn(int(m.NumOfChunks-1)+3))
 					time.Sleep(t)
 
 					flag := true
 					for flag {
-						ID := chunkMap[int(i)][0]
+
+						index := rand.Intn(len(chunkMap[int(i)]))
+						ID := chunkMap[int(i)][index]
 						offset := i * m.ChunkSize
 						size := m.ChunkSize
 
@@ -222,7 +231,7 @@ func CreateUser(cfg *config) {
 
 							if subtle.ConstantTimeCompare(hash1[:], hash2[:]) == 1 {
 
-								start = true
+								start = 1
 
 								mutex.Lock()
 								_, err = outputFile.Seek(offset, 0)
@@ -251,9 +260,8 @@ func CreateUser(cfg *config) {
 				}(idx)
 			}
 
-			acWg.Done()
 			wg.Wait()
-			acWg.Wait()
+			start = 2
 
 			outputFile.Close()
 

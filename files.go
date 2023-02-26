@@ -29,6 +29,7 @@ type Meta struct {
 	NumOfChunks int64
 	Hash        string
 	Chunks      []Chunk
+	FilePath    string
 }
 
 var Files map[string]Meta
@@ -53,7 +54,8 @@ var fileProtocol = protocol.ID("/p2p/rpc/file")
 func (fs *FileService) GetChunk(ctx context.Context, params GetChunkParams, resp *GetChunkResponse) error {
 	fmt.Println("Got a GetChunk RPC")
 	meta := Files[params.FileHash]
-	inputFile, err := os.Open("4000/" + meta.Name)
+	fmt.Println(meta.FilePath)
+	inputFile, err := os.Open(meta.FilePath)
 	if err != nil {
 		panic(err)
 	}
